@@ -5,8 +5,11 @@ import { Program, makeMesh } from '../gl.js';
 import { SKY_LOOKUP_GLSL } from '../sky/atmosphere.js';
 import { FOAM_GLSL } from './foam.js';
 import { RAIN_SURFACE_GLSL } from '../fx/ripples.js';
+import { WAKE_GLSL } from '../ship/wake.js';
+import { KAIJU_WATER_GLSL } from '../kaiju/wake.js'; // kaiju
+import { BOAT_WATER_GLSL } from '../boat/wake.js'; // boat
 
-const VS = `
+const VS = KAIJU_WATER_GLSL /* kaiju */ + `
 layout(location = 0) in vec2 aPolar; // radius (m), angle (rad)
 uniform mat4 uViewProj;
 uniform vec3 uCamPos;
@@ -29,6 +32,7 @@ void main() {
   D += textureLod(uDisp[1], xz / uSize[1], max(lsp - log2(uTexel[1]), 0.0)).xyz;
   D += textureLod(uDisp[2], xz / uSize[2], max(lsp - log2(uTexel[2]), 0.0)).xyz;
   D *= uDispScale;
+  D.y += kaijuSea(xz, spacing).h; // kaiju: wake and bow waves
   // fade displacement where the mesh is extremely coarse (far field)
   vec3 P = vec3(xz.x + D.x, D.y, xz.y + D.z);
   // earth curvature
@@ -40,7 +44,7 @@ void main() {
   gl_Position = uViewProj * vec4(P, 1.0);
 }`;
 
-const FS = SKY_LOOKUP_GLSL + FOAM_GLSL + RAIN_SURFACE_GLSL + `
+const FS = SKY_LOOKUP_GLSL + FOAM_GLSL + RAIN_SURFACE_GLSL + WAKE_GLSL + KAIJU_WATER_GLSL /* kaiju */ + BOAT_WATER_GLSL /* boat */ + `
 in vec3 vWorld;
 in vec2 vXZ;
 in float vDisp;
@@ -142,10 +146,14 @@ void main() {
   vec2 ex = dFdx(vXZ), ey = dFdy(vXZ), qc = vXZ - uCamPos.xz;
   vec2 gCell = floor(vec2(dot(qc, ex) / max(dot(ex, ex), 1e-12), dot(qc, ey) / max(dot(ey, ey), 1e-12)));
   vec3 V = toCam / dist;
+  // the warship's wake: foam (x) and the strip its turbulence smooths (y)
+  vec2 wake = shipWake(P.xz, sqrt(footA));
+  KjSea kj = kaijuSea(vXZ, sqrt(footA)); // kaiju
 
   // slopes and their variance from all cascades (hardware anisotropic + trilinear filtering)
   vec2 s = vec2(0.0);
   vec2 var = vec2(0.0);
+  vec4 bfx = boatFx(P.xz);   // boat: the rowboat's field (src/boat/wake.js)
 // short-wave modulation: gust patches (cat's paws, ~100-300 m, drifting with the wind) and
   // hydrodynamic modulation (short waves steepen on the crests of the long waves)
   vec2 gq = vXZ - uGust.yz;
@@ -157,10 +165,13 @@ void main() {
   float face = smoothstep(0.0, 1.0, -dot(s, uWindDir) / max(uLongSlope, 0.01));
   float hm = clamp(0.6 * crestM + 0.4 * face, 0.0, 1.0);
   float sm = clamp((1.0 + uGust.x * (gust - 0.5)) * mix(0.8, 1.25, hm), 0.6, 1.5);
+  sm *= 1.0 - 0.55 * kj.calm; // kaiju: short waves damped in the wake
+  sm *= 1.0 - 0.6 * clamp(bfx.a, 0.0, 1.0);   // boat: the wake slick and puddles damp the short waves
   SLOPE(1, mix(1.0, sm, 0.5))
   // slopes of the waves long enough to make thin, backlit crests
   vec2 sL = s;
   SLOPE(2, sm) SLOPE(3, sm)
+  s += kj.g; // kaiju
   float foamRaw = 0.0;
   float plume = 0.0;
   float activeRaw = 0.0;
@@ -188,12 +199,15 @@ void main() {
     float pa = textureLod(uActive, u1, 3.5).r;
     plume = clamp(pa * 1.5 * mix(0.5, 1.3, crest), 0.0, 2.0);
   }
+  foamRaw += kj.res; activeRaw += kj.act; plume += kj.plume; // kaiju
 
   // rain ripples: normal perturbation near the camera, extra roughness further away
   vec3 rr = rainRipples(vXZ, uTime, uRain, dist, sqrt(footA));
   s += rr.xy;
+  s += bfx.rg;               // boat: wake, oar puddles, contact foam (src/boat/wake.js)
   // unresolved capillary roughness: sparkles near the camera, smooth BRDF lobe far away
-  float unres = uUnresolved * 0.5 * sm * sm * (1.0 - 0.4 * uRain);
+  float unres = uUnresolved * 0.5 * sm * sm * (1.0 - 0.4 * uRain) * (1.0 - 0.7 * wake.y);
+  unres *= 1.0 - 0.75 * clamp(bfx.a, 0.0, 1.0);   // boat: the wake slick smooths the ripples
   vec2 sigmaSq = var + vec2(unres);
   sigmaSq = max(sigmaSq, vec2(2e-5));
 
@@ -241,6 +255,7 @@ void main() {
   // mip from the BRDF width and from the spread of reflected directions within the pixel
   float envSpread = min(rough * 1.18, 1.2);
   vec3 sky = envSample(R, envSpread) * mix(1.0, F2, below) + below * (1.0 - F2) * uRrs * Ed;
+  sky = boatReflect(P, R, sky);   // boat: the rowboat mirrored in the sea
   vec3 refl = F * sky;
   // rain impact stipple where a single impact (crater + crown, ~2 cm2) is about pixel-sized: a
   // Poisson count of impacts within the ~60 ms they stay visible; craters see the lower sky
@@ -323,17 +338,19 @@ void main() {
   // submerged bubbles backscatter strongly: the water around and beneath whitecaps turns pale aquamarine
   float pl = (1.0 - exp(-plume * uFoamAmount * 1.8)) * (1.0 - smoothstep(150.0, 900.0, dist) * 0.6);
   body += (1.0 - F) * pl * vec3(0.035, 0.062, 0.053) * Ed / M_PI;
+  refl *= 1.0 + min(bfx.b, 0.0); sun *= 1.0 + min(bfx.b, 0.0);   // boat: the hull hides the sky beside it
   vec3 col = refl * uDbgMask.x + sun * uDbgMask.y + (body + sss) * uDbgMask.z;
   col += (1.0 - F) * uRain * 0.008 * smoothstep(3.0, 40.0, dist) * (uSkyE + uSunE * sunVis * max(L.y, 0.0)) / M_PI;
 
   // foam
   vec2 fc = foamCoverage(vXZ, foamRaw * uFoamAmount, uFoamLace * uFoamAmount, activeRaw * uFoamAmount, dist);
-  float foam = fc.x;
+  { float bf = clamp(bfx.b, 0.0, 1.0); fc = vec2(1.0 - (1.0 - fc.x) * (1.0 - bf), max(fc.y, bf * 0.85)); }   // boat
+  float foam = max(fc.x, wake.x);
   if (uDebug == 1) { oColor = vec4(foam, foamRaw, foamCovA, 1.0); return; }
   if (foam > 0.0) {
     // bubble layer: thick fresh foam is a bright diffuse scatterer (albedo ~0.8);
     // thin residual foam is translucent and picks up the water's blue-green
-    float thick = fc.y;
+    float thick = max(fc.y, wake.x * 0.85);
     vec3 Nf = normalize(vec3(-s.x + foamBump.x * 1.8, 1.0, -s.y + foamBump.y * 1.8));
     float wrapL = max((dot(Nf, L) + 0.2) / 1.2, 0.0);
     vec3 Ein = uSunE * sunVis * wrapL + uSkyE * (0.45 + 0.55 * Nf.y) + uFlash;

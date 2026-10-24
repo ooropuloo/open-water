@@ -1,5 +1,20 @@
 # Open Water
 
+> **This is a fork.** The ocean, sky, weather and sound engine are
+> [Open Water by Leonxlnx](https://github.com/Leonxlnx/open-water) (MIT). This fork adds sea life
+> and a few controls on top, all procedural like the original (no models or textures):
+>
+> - **Rowboat** with a rower, rowing stroke, wake, oar swirls and spray (`src/boat/`) · **B**
+> - **Warship**, a ~130 m frigate steaming across the view with bow wave, wake and navigation lights (`src/ship/`) · **S**
+> - **Humpback whale**: blows, surfacing, fluke-up dives and breaches (`src/whale/`) · **K** to surface, **J** to breach, hold or Shift to switch off
+> - **Kaiju** swim-by with Kelvin wake, rising and roaring (`src/kaiju/`) · **G** to summon, hold or Shift to switch off
+> - **Auto mode**: weather, whale and kaiju take turns on their own (`src/auto.js`) · **A**, or `?auto=1`
+> - **Full screen** button (**F**); where a page cannot go full screen (iPhone) it hides the controls instead.
+>   For a clean picture when screen mirroring from an iPhone, use *Add to Home Screen*: it then opens without browser UI.
+> - Phone layout: the tool icons sit in a rail on the right edge.
+>
+> **Live (this fork):** https://ooropuloo.github.io/open-water/ · original: https://leonxlnx.github.io/open-water/
+
 A real-time, physically based ocean in pure WebGL2, with weather you can steer: calm golden
 hours, rising wind, rain, squall lines, gales, lightning and moonlit nights. There are no textures, models or
 image assets. Every wave, cloud, foam bubble and raindrop is computed. The only recorded

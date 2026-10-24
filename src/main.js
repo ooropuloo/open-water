@@ -16,6 +16,11 @@ import { Profiler } from './profiler.js';
 import { UI, UI_CSS } from './ui.js';
 import { AudioEngine, renderSoundtrack, encodeWav } from './audio/audio.js';
 import { film } from './film.js';
+import { Boat } from './boat/boat.js';
+import { Ship } from './ship/ship.js';
+import { Whale } from './whale/whale.js'; // whale
+import { Kaiju } from './kaiju/kaiju.js'; // kaiju
+import { roar } from './kaiju/roar.js'; // kaiju
 
 const params = new URLSearchParams(location.search);
 const mixv = (a, b, t) => a.map((x, i) => x + (b[i] - x) * t);
@@ -63,17 +68,28 @@ export class App {
       fov: Number(params.get('fov') || 42) * Math.PI / 180,
     };
     this.time = Number(params.get('t') || 0);
+    // a rowboat in front of the camera (?boat=0 hides it, ?boatDist= metres)
+    this.boat = new Boat(gl, { visible: params.get('boat') !== '0', anchor: this.cam.base, yaw: this.cam.yaw, dist: Number(params.get('boatDist') || 45) });
+    // a warship steaming across the view further out (?ship=0 hides it, ?shipDist= metres)
+    this.ship = new Ship(gl, { visible: params.get('ship') !== '0', anchor: this.cam.base, yaw: this.cam.yaw, dist: Number(params.get('shipDist') || 820) });
+    // whale: a humpback ~175 m out, off to one side (?whale=0 hides it; ?whale=blow|dive|flukes|breach|air|splash|<s> picks the moment)
+    const wq = params.get('whale') || ''; // whale
+    this.whale = new Whale(gl, { visible: wq !== '0', anchor: this.cam.base, yaw: this.cam.yaw, dist: Number(params.get('whaleDist') || 175), az: Number(params.get('whaleAz') ?? 15), start: wq === '1' ? '' : wq }); // whale
+    // kaiju: a giant saurian swims past every few minutes (?kaiju=0 off, =now, =<seconds into a pass> or approach/cross/rise/leave; ?kaijuGap=s)
+    this.kaiju = new Kaiju(gl, { mode: params.get('kaiju') ?? (RENDER_MODE ? 'off' : 'auto'), gap: params.has('kaijuGap') ? Number(params.get('kaijuGap')) : null });
     this.scale = Number(params.get('scale') || Math.min(window.devicePixelRatio || 1, 1.5));
     this.msaa = Number(params.get('msaa') || QUALITY.msaa);
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.resize()).observe(this.canvas);
     this.bindInput();
   }
 
   resize(w, h) {
     const gl = this.gl;
-    w = w || Math.round(this.canvas.clientWidth * this.scale);
-    h = h || Math.round(this.canvas.clientHeight * this.scale);
+    // an iframe can start unlaid-out (0x0); keep a 1x1 target until the observer below reports a size
+    w = Math.max(1, w || Math.round(this.canvas.clientWidth * this.scale));
+    h = Math.max(1, h || Math.round(this.canvas.clientHeight * this.scale));
     if (w === this.w && h === this.h) return;
     this.w = w; this.h = h;
     this.ms?.dispose();
@@ -180,6 +196,10 @@ export class App {
     const stats = this.ocean.stats;
 
     this.updateCamera(dt);
+    this.boat.update(dt, this.ocean.textures(), this.cam, this.water.angStep, RENDER_MODE);
+    this.ship.update(dt, this.ocean.textures(), this.cam, this.water.angStep, RENDER_MODE, sun);
+    this.whale.update(dt, this.ocean.textures(), this.cam, this.water.angStep, RENDER_MODE, { windVec: [Math.cos((S.windDir * Math.PI) / 180) * S.wind, Math.sin((S.windDir * Math.PI) / 180) * S.wind], sunDir: sun }); // whale
+    this.kaiju.update(dt, this.ocean.textures(), this.cam, this.water.angStep, RENDER_MODE, sun); // kaiju
     P.section('atmosphere');
     const camH = this.cam.pos[1];
     this.atmo.update(sun, camH, S.haze);
@@ -308,8 +328,18 @@ export class App {
       uBolt: this.lightning.ground && this.lightning.bolt > 0.01 && this.lightning.strike?.ground
         ? [this.lightning.ground[0], this.lightning.ground[1], this.lightning.ground[2], this.lightning.bolt * 2600 * (this.boltT ?? 1)] : [0, 0, 0, 0],
       uFoamTex: this.foam.tex, uWindDir: [Math.cos(wd), Math.sin(wd)], uFoamStretch: Math.min(Math.max((S.wind - 10) / 8, 0), 1), uDebug: 0,
+      ...this.boat.waterFx(), // boat: wake / puddles / contact foam field
     };
+    Object.assign(this.waterUniforms, this.kaiju.waterUniforms()); // kaiju
+    // (before the water: its depth lid keeps the sea out of the hull, and the sea hides what is submerged)
+    Object.assign(this.waterUniforms, this.ship.wakeUniforms());
+    this.ship.draw(this.waterUniforms);
+    this.boat.draw(this.waterUniforms);
+    this.whale.draw({ ...this.waterUniforms, uAngStep: this.water.angStep }); // whale
+    this.kaiju.draw(this.waterUniforms, this.cam.fov / this.h); // kaiju
     this.water.draw(this.waterUniforms);
+    this.ship.drawLights(this.waterUniforms, { pixelAngle: this.cam.fov / this.h, night });
+    this.boat.drawFx(this.waterUniforms, [this.w, this.h], dt, this.cam.fov / this.h); // boat: spray drops
 
     P.section('rain');
     this.rainDrift = this.rainDrift || [0, 0];
@@ -317,6 +347,7 @@ export class App {
     this.rainDrift[1] += Math.sin(wd) * S.wind * 0.8 * dt;
     const pixelAngle = this.cam.fov / this.h;
     const fxU = { viewProj: M.vp, camPos: this.cam.pos, pixelAngle };
+    this.whale.drawAfterWater({ ...this.waterUniforms, uAngStep: this.water.angStep }, { ...fxU, skyU: { ...skyU, ...fogU }, flash: flashRGB }); // whale
     // bolt seen through the rain: base fog plus the storm side's curtains along the path
     {
       const s0 = -S.frontDist - fCurve, sB = s0 + (lv[0] * fn[0] + lv[2] * fn[1]);
@@ -326,6 +357,7 @@ export class App {
     this.lightning.draw({ ...fxU, fogDensity: 0, transmit: this.boltT, base: fOn ? Math.min(S.cloudBase, S.sBase) : S.cloudBase });
     const windVec = [Math.cos(wd) * S.wind, Math.sin(wd) * S.wind];
     this.spray.draw({ ...fxU, skyU, anchor: this.cam.base, time: t, wind: S.wind, windVec, disp: ot.disp.slice(0, 3), active: ot.active[1], sizes: ot.sizes, flash: flashRGB });
+    this.kaiju.drawSpray(this.waterUniforms, pixelAngle, windVec); // kaiju
     this.rain.draw({
       ...fxU, skyU, rain: L.rain, time: t, exposure: 1 / 60,
       wind: [Math.cos(wd) * S.wind * 0.8, Math.sin(wd) * S.wind * 0.8],
@@ -352,6 +384,7 @@ export class App {
     this.stats = stats;
     this.flash = flash;
     this.thunderEvents = this.lightning.events.splice(0);
+    this.kaijuEvents = this.kaiju.events.splice(0); // kaiju
   }
 
   // Film: drive weather + camera from the timeline at time t (seconds), deterministic.
@@ -466,6 +499,7 @@ const audio = {
     e.tick();
     // muted (suspended) context: drop thunder instead of queueing it for the unmute
     if (this.ctx.state === 'running') for (const ev of app.thunderEvents || []) e.thunder(this.ctx.currentTime, ev.dist, ev.power);
+    if (this.ctx.state === 'running') for (const ev of app.kaijuEvents || []) if (ev.type === 'roar') roar(this.ctx, e.master, ev.dist); // kaiju
   },
 };
 

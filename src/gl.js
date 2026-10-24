@@ -233,7 +233,7 @@ export class MSTarget {
         if (this.tryCreate(gl[ifmt], n)) { this.format = format; this.samples = n; return; }
       }
     }
-    throw new Error('no renderable HDR framebuffer format (' + list.join(', ') + ')');
+    throw new Error('no renderable HDR framebuffer format (' + list.join(', ') + ') ' + this.w + 'x' + this.h + ' lost=' + gl.isContextLost() + ' err=' + gl.getError());
   }
   tryCreate(ifmt, samples) {
     const gl = this.gl;

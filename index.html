@@ -5,16 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Open Water</title>
   <meta name="description" content="A physically based ocean in pure WebGL2: FFT waves, volumetric clouds, rain, squalls, lightning and sound.">
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="icon-192.png">
+  <!-- installable: "Add to Home Screen" opens it without any browser UI (iPhone cannot full-screen a web page otherwise) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Open Water">
+  <meta name="theme-color" content="#05070a">
   <style>
     html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
     canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
     canvas:active { cursor: grabbing; }
+    .build { position: fixed; right: 12px; bottom: 8px; z-index: 5; pointer-events: none; color: rgba(255, 255, 255, 0.55); font: 11px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.04em; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
     .err { position: fixed; inset: 16px; color: #f88; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
+  <div class="build" id="build">sea-life build 2026-10-24 13:54</div>
   <script type="module" src="src/main.js"></script>
 </body>
 </html>
